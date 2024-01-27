@@ -103,15 +103,15 @@ func (c *SimpleCache[K, V, S]) GetIFPresent(key K) (V, error) {
 	return v, nil
 }
 
-func (c *SimpleCache[K, V, S]) get(key K, onLoad bool) (zero V, _ error) {
+func (c *SimpleCache[K, V, S]) get(key K, onLoad bool) (V, error) {
 	v, err := c.getValue(key, onLoad)
 	if err != nil {
-		return zero, err
+		return zero[V](), err
 	}
 	return c.deserializeValue(key, v)
 }
 
-func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
+func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 	c.mu.Lock()
 	item, ok := c.items[key]
 	if ok {
@@ -129,21 +129,19 @@ func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 	if !onLoad {
 		c.stats.IncrMissCount()
 	}
-	return zero, KeyNotFoundError
+	return zero[S](), KeyNotFoundError
 }
 
 func (c *SimpleCache[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
-		var zero V
-		return zero, KeyNotFoundError
+		return zero[V](), KeyNotFoundError
 	}
-	value, err := c.load(key, func(v V, expiration *time.Duration) (V, error) {
+	return c.load(key, func(v V, expiration *time.Duration) (V, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)
 		if err != nil {
-			var zero V
-			return zero, err
+			return zero[V](), err
 		}
 		if expiration != nil {
 			t := c.clock.Now().Add(*expiration)
@@ -151,11 +149,6 @@ func (c *SimpleCache[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 		}
 		return v, nil
 	}, isWait)
-	if err != nil {
-		var zero V
-		return zero, err
-	}
-	return value, nil
 }
 
 func (c *SimpleCache[K, V, S]) evict(count int) {

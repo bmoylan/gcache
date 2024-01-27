@@ -53,8 +53,7 @@ func (g *Group[K, V]) Do(key K, fn func() (V, error), isWait bool) (V, bool, err
 	if c, ok := g.m[key]; ok {
 		g.mu.Unlock()
 		if !isWait {
-			var zero V
-			return zero, false, KeyNotFoundError
+			return zero[V](), false, KeyNotFoundError
 		}
 		c.wg.Wait()
 		return c.val, false, c.err
@@ -64,10 +63,13 @@ func (g *Group[K, V]) Do(key K, fn func() (V, error), isWait bool) (V, bool, err
 	g.m[key] = c
 	g.mu.Unlock()
 	if !isWait {
-		// TODO: handle error
-		go g.call(c, key, fn)
-		var zero V
-		return zero, false, KeyNotFoundError
+		go func() {
+			if _, err := g.call(c, key, fn); err != nil {
+				// TODO: handle error
+				_ = err
+			}
+		}()
+		return zero[V](), false, KeyNotFoundError
 	}
 	v, err = g.call(c, key, fn)
 	return v, true, err

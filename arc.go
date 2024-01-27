@@ -178,15 +178,15 @@ func (c *ARC[K, V, S]) GetIFPresent(key K) (V, error) {
 	return v, err
 }
 
-func (c *ARC[K, V, S]) get(key K, onLoad bool) (zero V, _ error) {
+func (c *ARC[K, V, S]) get(key K, onLoad bool) (V, error) {
 	v, err := c.getValue(key, onLoad)
 	if err != nil {
-		return zero, err
+		return zero[V](), err
 	}
 	return c.deserializeValue(key, v)
 }
 
-func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
+func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if elt := c.t1.Lookup(key); elt != nil {
@@ -202,7 +202,7 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 			delete(c.items, key)
 			c.b1.PushFront(key)
 			if err := c.evictValue(item.key, item.value); err != nil {
-				return zero, err
+				return zero[S](), err
 			}
 		}
 	}
@@ -219,7 +219,7 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 			c.t2.Remove(key, elt)
 			c.b2.PushFront(key)
 			if err := c.evictValue(item.key, item.value); err != nil {
-				return zero, err
+				return zero[S](), err
 			}
 		}
 	}
@@ -227,20 +227,19 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 	if !onLoad {
 		c.stats.IncrMissCount()
 	}
-	return zero, KeyNotFoundError
+	return zero[S](), KeyNotFoundError
 }
 
-func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (zero V, _ error) {
+func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
-		return zero, KeyNotFoundError
+		return zero[V](), KeyNotFoundError
 	}
-	value, err := c.load(key, func(v V, expiration *time.Duration) (V, error) {
+	return c.load(key, func(v V, expiration *time.Duration) (V, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)
 		if err != nil {
-			var zero V
-			return zero, err
+			return zero[V](), err
 		}
 		if expiration != nil {
 			t := c.clock.Now().Add(*expiration)
@@ -248,10 +247,6 @@ func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (zero V, _ error) {
 		}
 		return v, nil
 	}, isWait)
-	if err != nil {
-		return zero, err
-	}
-	return value, nil
 }
 
 // Has checks if key exists in cache

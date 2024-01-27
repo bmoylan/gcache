@@ -226,9 +226,9 @@ func (cb *CacheBuilder[K, V, S]) newBaseCache() baseCache[K, V, S] {
 }
 
 // load a new value using by specified key.
-func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), isWait bool) (zero V, _ error) {
+func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
-		return zero, KeyNotFoundError
+		return zero[V](), KeyNotFoundError
 	}
 	v, _, err := c.loadGroup.Do(key, func() (v V, e error) {
 		defer func() {
@@ -245,9 +245,9 @@ func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), 
 	return v, err
 }
 
-func (c *baseCache[K, V, S]) serializeValue(k K, v V) (zero S, err error) {
+func (c *baseCache[K, V, S]) serializeValue(k K, v V) (_ S, err error) {
 	if c.serializeFunc == nil {
-		return zero, fmt.Errorf("gcache: serializeFunc is nil")
+		return zero[S](), fmt.Errorf("gcache: serializeFunc is nil")
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -257,9 +257,9 @@ func (c *baseCache[K, V, S]) serializeValue(k K, v V) (zero S, err error) {
 	return c.serializeFunc(k, v)
 }
 
-func (c *baseCache[K, V, S]) deserializeValue(k K, s S) (zero V, err error) {
+func (c *baseCache[K, V, S]) deserializeValue(k K, s S) (_ V, err error) {
 	if c.deserializeFunc == nil {
-		return zero, fmt.Errorf("gcache: deserializeFunc is nil")
+		return zero[V](), fmt.Errorf("gcache: deserializeFunc is nil")
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -312,3 +312,5 @@ func (c *baseCache[K, V, S]) addValue(key K, value V) (err error) {
 	}
 	return nil
 }
+
+func zero[T any]() (t T) { return }
