@@ -74,8 +74,8 @@ func (c *SimpleCache[K, V, S]) set(key K, value V) (any, error) {
 		item.expiration = &t
 	}
 
-	if c.addedFunc != nil {
-		c.addedFunc(key, value)
+	if err := c.addValue(key, value); err != nil {
+		return nil, err
 	}
 
 	return item, nil
@@ -103,16 +103,15 @@ func (c *SimpleCache[K, V, S]) GetIFPresent(key K) (V, error) {
 	return v, nil
 }
 
-func (c *SimpleCache[K, V, S]) get(key K, onLoad bool) (V, error) {
+func (c *SimpleCache[K, V, S]) get(key K, onLoad bool) (zero V, _ error) {
 	v, err := c.getValue(key, onLoad)
 	if err != nil {
-		var zero V
 		return zero, err
 	}
 	return c.deserializeValue(key, v)
 }
 
-func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (S, error) {
+func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 	c.mu.Lock()
 	item, ok := c.items[key]
 	if ok {
@@ -130,7 +129,6 @@ func (c *SimpleCache[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 	if !onLoad {
 		c.stats.IncrMissCount()
 	}
-	var zero S
 	return zero, KeyNotFoundError
 }
 
@@ -139,11 +137,7 @@ func (c *SimpleCache[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 		var zero V
 		return zero, KeyNotFoundError
 	}
-	value, _, err := c.load(key, func(v V, expiration *time.Duration, e error) (V, error) {
-		if e != nil {
-			var zero V
-			return zero, e
-		}
+	value, err := c.load(key, func(v V, expiration *time.Duration) (V, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)

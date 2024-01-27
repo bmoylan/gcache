@@ -78,7 +78,7 @@ func (c *ARC[K, V, S]) SetWithExpire(key K, value V, expiration time.Duration) e
 	return nil
 }
 
-func (c *ARC[K, V, S]) set(key K, value V) (*arcItem[K, S], error) {
+func (c *ARC[K, V, S]) set(key K, value V) (_ *arcItem[K, S], err error) {
 	serializedValue, err := c.serializeValue(key, value)
 	if err != nil {
 		return nil, err
@@ -102,8 +102,8 @@ func (c *ARC[K, V, S]) set(key K, value V) (*arcItem[K, S], error) {
 	}
 
 	defer func() {
-		if c.addedFunc != nil {
-			c.addedFunc(key, value)
+		if e := c.addValue(key, value); e != nil && err == nil {
+			err = e
 		}
 	}()
 
@@ -178,16 +178,15 @@ func (c *ARC[K, V, S]) GetIFPresent(key K) (V, error) {
 	return v, err
 }
 
-func (c *ARC[K, V, S]) get(key K, onLoad bool) (V, error) {
+func (c *ARC[K, V, S]) get(key K, onLoad bool) (zero V, _ error) {
 	v, err := c.getValue(key, onLoad)
 	if err != nil {
-		var zero V
 		return zero, err
 	}
 	return c.deserializeValue(key, v)
 }
 
-func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (S, error) {
+func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (zero S, _ error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if elt := c.t1.Lookup(key); elt != nil {
@@ -203,7 +202,6 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 			delete(c.items, key)
 			c.b1.PushFront(key)
 			if err := c.evictValue(item.key, item.value); err != nil {
-				var zero S
 				return zero, err
 			}
 		}
@@ -221,7 +219,6 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 			c.t2.Remove(key, elt)
 			c.b2.PushFront(key)
 			if err := c.evictValue(item.key, item.value); err != nil {
-				var zero S
 				return zero, err
 			}
 		}
@@ -230,20 +227,14 @@ func (c *ARC[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 	if !onLoad {
 		c.stats.IncrMissCount()
 	}
-	var zero S
 	return zero, KeyNotFoundError
 }
 
-func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
+func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (zero V, _ error) {
 	if c.loaderExpireFunc == nil {
-		var zero V
 		return zero, KeyNotFoundError
 	}
-	value, _, err := c.load(key, func(v V, expiration *time.Duration, e error) (V, error) {
-		if e != nil {
-			var zero V
-			return zero, e
-		}
+	value, err := c.load(key, func(v V, expiration *time.Duration) (V, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)
@@ -258,7 +249,6 @@ func (c *ARC[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 		return v, nil
 	}, isWait)
 	if err != nil {
-		var zero V
 		return zero, err
 	}
 	return value, nil

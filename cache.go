@@ -226,44 +226,60 @@ func (cb *CacheBuilder[K, V, S]) newBaseCache() baseCache[K, V, S] {
 }
 
 // load a new value using by specified key.
-func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration, error) (V, error), isWait bool) (V, bool, error) {
-	v, called, err := c.loadGroup.Do(key, func() (v V, e error) {
+func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), isWait bool) (zero V, _ error) {
+	if c.loaderExpireFunc == nil {
+		return zero, KeyNotFoundError
+	}
+	v, _, err := c.loadGroup.Do(key, func() (v V, e error) {
 		defer func() {
 			if r := recover(); r != nil {
-				e = fmt.Errorf("Loader panics: %v", r)
+				e = fmt.Errorf("loader panics: %v", r)
 			}
 		}()
-		return cb(c.loaderExpireFunc(key))
+		v, expiration, err := c.loaderExpireFunc(key)
+		if err != nil {
+			return v, err
+		}
+		return cb(v, expiration)
 	}, isWait)
-	if err != nil {
-		var zero V
-		return zero, called, err
-	}
-	return v, called, nil
+	return v, err
 }
 
-func (c *baseCache[K, V, S]) serializeValue(k K, v V) (S, error) {
+func (c *baseCache[K, V, S]) serializeValue(k K, v V) (zero S, err error) {
 	if c.serializeFunc == nil {
-		var zero S
 		return zero, fmt.Errorf("gcache: serializeFunc is nil")
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("serializer panics: %v", r)
+		}
+	}()
 	return c.serializeFunc(k, v)
 }
 
-func (c *baseCache[K, V, S]) deserializeValue(k K, s S) (V, error) {
+func (c *baseCache[K, V, S]) deserializeValue(k K, s S) (zero V, err error) {
 	if c.deserializeFunc == nil {
-		var zero V
 		return zero, fmt.Errorf("gcache: deserializeFunc is nil")
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("deserializer panics: %v", r)
+		}
+	}()
 	return c.deserializeFunc(k, s)
 }
 
-func (c *baseCache[K, V, S]) evictValue(key K, serialized S) error {
+func (c *baseCache[K, V, S]) evictValue(key K, serialized S) (err error) {
 	if c.evictedFunc != nil {
-		value, err := c.deserializeFunc(key, serialized)
+		value, err := c.deserializeValue(key, serialized)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("evicter panics: %v", r)
+			}
+		}()
 		c.evictedFunc(key, value)
 	}
 	return nil
@@ -271,11 +287,28 @@ func (c *baseCache[K, V, S]) evictValue(key K, serialized S) error {
 
 func (c *baseCache[K, V, S]) purgeValue(key K, serialized S) error {
 	if c.purgeVisitorFunc != nil {
-		value, err := c.deserializeFunc(key, serialized)
+		value, err := c.deserializeValue(key, serialized)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("purger panics: %v", r)
+			}
+		}()
 		c.purgeVisitorFunc(key, value)
+	}
+	return nil
+}
+
+func (c *baseCache[K, V, S]) addValue(key K, value V) (err error) {
+	if c.addedFunc != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("adder panics: %v", r)
+			}
+		}()
+		c.addedFunc(key, value)
 	}
 	return nil
 }
