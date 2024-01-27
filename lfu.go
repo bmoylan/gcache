@@ -6,47 +6,45 @@ import (
 )
 
 // Discards the least frequently used items first.
-type LFUCache struct {
-	baseCache
-	items    map[interface{}]*lfuItem
+type LFUCache[K comparable, V any, S any] struct {
+	baseCache[K, V, S]
+	items    map[K]*lfuItem[K, S]
 	freqList *list.List // list for freqEntry
 }
 
-var _ Cache = (*LFUCache)(nil)
+var _ Cache[string, any] = (*LFUCache[string, any, any])(nil)
 
-type lfuItem struct {
+type lfuItem[K comparable, S any] struct {
 	clock       Clock
-	key         interface{}
-	value       interface{}
+	key         K
+	value       S
 	freqElement *list.Element
 	expiration  *time.Time
 }
 
-type freqEntry struct {
+type freqEntry[K comparable, S any] struct {
 	freq  uint
-	items map[*lfuItem]struct{}
+	items map[*lfuItem[K, S]]struct{}
 }
 
-func newLFUCache(cb *CacheBuilder) *LFUCache {
-	c := &LFUCache{}
-	buildCache(&c.baseCache, cb)
-
+func newLFUCache[K comparable, V any, S any](cb *CacheBuilder[K, V, S]) *LFUCache[K, V, S] {
+	c := &LFUCache[K, V, S]{baseCache: cb.newBaseCache()}
 	c.init()
 	c.loadGroup.cache = c
 	return c
 }
 
-func (c *LFUCache) init() {
+func (c *LFUCache[K, V, S]) init() {
 	c.freqList = list.New()
-	c.items = make(map[interface{}]*lfuItem, c.size)
-	c.freqList.PushFront(&freqEntry{
+	c.items = make(map[K]*lfuItem[K, S], c.size)
+	c.freqList.PushFront(&freqEntry[K, S]{
 		freq:  0,
-		items: make(map[*lfuItem]struct{}),
+		items: make(map[*lfuItem[K, S]]struct{}),
 	})
 }
 
 // Set a new key-value pair
-func (c *LFUCache) Set(key, value interface{}) error {
+func (c *LFUCache[K, V, S]) Set(key K, value V) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, err := c.set(key, value)
@@ -54,7 +52,7 @@ func (c *LFUCache) Set(key, value interface{}) error {
 }
 
 // Set a new key-value pair with an expiration time
-func (c *LFUCache) SetWithExpire(key, value interface{}, expiration time.Duration) error {
+func (c *LFUCache[K, V, S]) SetWithExpire(key K, value V, expiration time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	item, err := c.set(key, value)
@@ -63,36 +61,33 @@ func (c *LFUCache) SetWithExpire(key, value interface{}, expiration time.Duratio
 	}
 
 	t := c.clock.Now().Add(expiration)
-	item.(*lfuItem).expiration = &t
+	item.expiration = &t
 	return nil
 }
 
-func (c *LFUCache) set(key, value interface{}) (interface{}, error) {
-	var err error
-	if c.serializeFunc != nil {
-		value, err = c.serializeFunc(key, value)
-		if err != nil {
-			return nil, err
-		}
+func (c *LFUCache[K, V, S]) set(key K, value V) (*lfuItem[K, S], error) {
+	serializedValue, err := c.serializeValue(key, value)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check for existing item
 	item, ok := c.items[key]
 	if ok {
-		item.value = value
+		item.value = serializedValue
 	} else {
 		// Verify size not exceeded
 		if len(c.items) >= c.size {
 			c.evict(1)
 		}
-		item = &lfuItem{
+		item = &lfuItem[K, S]{
 			clock:       c.clock,
 			key:         key,
-			value:       value,
+			value:       serializedValue,
 			freqElement: nil,
 		}
 		el := c.freqList.Front()
-		fe := el.Value.(*freqEntry)
+		fe := el.Value.(*freqEntry[K, S])
 		fe.items[item] = struct{}{}
 
 		item.freqElement = el
@@ -114,7 +109,7 @@ func (c *LFUCache) set(key, value interface{}) (interface{}, error) {
 // Get a value from cache pool using key if it exists.
 // If it does not exists key and has LoaderFunc,
 // generate a value using `LoaderFunc` method returns value.
-func (c *LFUCache) Get(key interface{}) (interface{}, error) {
+func (c *LFUCache[K, V, S]) Get(key K) (V, error) {
 	v, err := c.get(key, false)
 	if err == KeyNotFoundError {
 		return c.getWithLoader(key, true)
@@ -125,7 +120,7 @@ func (c *LFUCache) Get(key interface{}) (interface{}, error) {
 // GetIFPresent gets a value from cache pool using key if it exists.
 // If it does not exists key, returns KeyNotFoundError.
 // And send a request which refresh value for specified key if cache object has LoaderFunc.
-func (c *LFUCache) GetIFPresent(key interface{}) (interface{}, error) {
+func (c *LFUCache[K, V, S]) GetIFPresent(key K) (V, error) {
 	v, err := c.get(key, false)
 	if err == KeyNotFoundError {
 		return c.getWithLoader(key, false)
@@ -133,18 +128,16 @@ func (c *LFUCache) GetIFPresent(key interface{}) (interface{}, error) {
 	return v, err
 }
 
-func (c *LFUCache) get(key interface{}, onLoad bool) (interface{}, error) {
+func (c *LFUCache[K, V, S]) get(key K, onLoad bool) (V, error) {
 	v, err := c.getValue(key, onLoad)
 	if err != nil {
-		return nil, err
+		var zero V
+		return zero, err
 	}
-	if c.deserializeFunc != nil {
-		return c.deserializeFunc(key, v)
-	}
-	return v, nil
+	return c.deserializeValue(key, v)
 }
 
-func (c *LFUCache) getValue(key interface{}, onLoad bool) (interface{}, error) {
+func (c *LFUCache[K, V, S]) getValue(key K, onLoad bool) (S, error) {
 	c.mu.Lock()
 	item, ok := c.items[key]
 	if ok {
@@ -163,38 +156,43 @@ func (c *LFUCache) getValue(key interface{}, onLoad bool) (interface{}, error) {
 	if !onLoad {
 		c.stats.IncrMissCount()
 	}
-	return nil, KeyNotFoundError
+	var zero S
+	return zero, KeyNotFoundError
 }
 
-func (c *LFUCache) getWithLoader(key interface{}, isWait bool) (interface{}, error) {
+func (c *LFUCache[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
-		return nil, KeyNotFoundError
+		var zero V
+		return zero, KeyNotFoundError
 	}
-	value, _, err := c.load(key, func(v interface{}, expiration *time.Duration, e error) (interface{}, error) {
+	value, _, err := c.load(key, func(v V, expiration *time.Duration, e error) (V, error) {
 		if e != nil {
-			return nil, e
+			var zero V
+			return zero, e
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)
 		if err != nil {
-			return nil, err
+			var zero V
+			return zero, err
 		}
 		if expiration != nil {
 			t := c.clock.Now().Add(*expiration)
-			item.(*lfuItem).expiration = &t
+			item.expiration = &t
 		}
 		return v, nil
 	}, isWait)
 	if err != nil {
-		return nil, err
+		var zero V
+		return zero, err
 	}
 	return value, nil
 }
 
-func (c *LFUCache) increment(item *lfuItem) {
+func (c *LFUCache[K, V, S]) increment(item *lfuItem[K, S]) {
 	currentFreqElement := item.freqElement
-	currentFreqEntry := currentFreqElement.Value.(*freqEntry)
+	currentFreqEntry := currentFreqElement.Value.(*freqEntry[K, S])
 	nextFreq := currentFreqEntry.freq + 1
 	delete(currentFreqEntry.items, item)
 
@@ -204,35 +202,35 @@ func (c *LFUCache) increment(item *lfuItem) {
 	// insert item into a valid entry
 	nextFreqElement := currentFreqElement.Next()
 	switch {
-	case nextFreqElement == nil || nextFreqElement.Value.(*freqEntry).freq > nextFreq:
+	case nextFreqElement == nil || nextFreqElement.Value.(*freqEntry[K, S]).freq > nextFreq:
 		if removable {
 			currentFreqEntry.freq = nextFreq
 			nextFreqElement = currentFreqElement
 		} else {
-			nextFreqElement = c.freqList.InsertAfter(&freqEntry{
+			nextFreqElement = c.freqList.InsertAfter(&freqEntry[K, S]{
 				freq:  nextFreq,
-				items: make(map[*lfuItem]struct{}),
+				items: make(map[*lfuItem[K, S]]struct{}),
 			}, currentFreqElement)
 		}
-	case nextFreqElement.Value.(*freqEntry).freq == nextFreq:
+	case nextFreqElement.Value.(*freqEntry[K, S]).freq == nextFreq:
 		if removable {
 			c.freqList.Remove(currentFreqElement)
 		}
 	default:
 		panic("unreachable")
 	}
-	nextFreqElement.Value.(*freqEntry).items[item] = struct{}{}
+	nextFreqElement.Value.(*freqEntry[K, S]).items[item] = struct{}{}
 	item.freqElement = nextFreqElement
 }
 
 // evict removes the least frequence item from the cache.
-func (c *LFUCache) evict(count int) {
+func (c *LFUCache[K, V, S]) evict(count int) {
 	entry := c.freqList.Front()
 	for i := 0; i < count; {
 		if entry == nil {
 			return
 		} else {
-			for item := range entry.Value.(*freqEntry).items {
+			for item := range entry.Value.(*freqEntry[K, S]).items {
 				if i >= count {
 					return
 				}
@@ -245,14 +243,14 @@ func (c *LFUCache) evict(count int) {
 }
 
 // Has checks if key exists in cache
-func (c *LFUCache) Has(key interface{}) bool {
+func (c *LFUCache[K, V, S]) Has(key K) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	now := time.Now()
 	return c.has(key, &now)
 }
 
-func (c *LFUCache) has(key interface{}, now *time.Time) bool {
+func (c *LFUCache[K, V, S]) has(key K, now *time.Time) bool {
 	item, ok := c.items[key]
 	if !ok {
 		return false
@@ -261,14 +259,14 @@ func (c *LFUCache) has(key interface{}, now *time.Time) bool {
 }
 
 // Remove removes the provided key from the cache.
-func (c *LFUCache) Remove(key interface{}) bool {
+func (c *LFUCache[K, V, S]) Remove(key K) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	return c.remove(key)
 }
 
-func (c *LFUCache) remove(key interface{}) bool {
+func (c *LFUCache[K, V, S]) remove(key K) bool {
 	if item, ok := c.items[key]; ok {
 		c.removeItem(item)
 		return true
@@ -277,22 +275,24 @@ func (c *LFUCache) remove(key interface{}) bool {
 }
 
 // removeElement is used to remove a given list element from the cache
-func (c *LFUCache) removeItem(item *lfuItem) {
-	entry := item.freqElement.Value.(*freqEntry)
+func (c *LFUCache[K, V, S]) removeItem(item *lfuItem[K, S]) {
+	entry := item.freqElement.Value.(*freqEntry[K, S])
 	delete(c.items, item.key)
 	delete(entry.items, item)
 	if isRemovableFreqEntry(entry) {
 		c.freqList.Remove(item.freqElement)
 	}
-	if c.evictedFunc != nil {
-		c.evictedFunc(item.key, item.value)
+
+	if err := c.evictValue(item.key, item.value); err != nil {
+		// TODO: log error
+		_ = err
 	}
 }
 
-func (c *LFUCache) keys() []interface{} {
+func (c *LFUCache[K, V, S]) keys() []K {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	keys := make([]interface{}, len(c.items))
+	keys := make([]K, len(c.items))
 	var i = 0
 	for k := range c.items {
 		keys[i] = k
@@ -302,24 +302,29 @@ func (c *LFUCache) keys() []interface{} {
 }
 
 // GetALL returns all key-value pairs in the cache.
-func (c *LFUCache) GetALL(checkExpired bool) map[interface{}]interface{} {
+func (c *LFUCache[K, V, S]) GetALL(checkExpired bool) map[K]V {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	items := make(map[interface{}]interface{}, len(c.items))
+	items := make(map[K]V, len(c.items))
 	now := time.Now()
 	for k, item := range c.items {
 		if !checkExpired || c.has(k, &now) {
-			items[k] = item.value
+			value, err := c.deserializeValue(item.key, item.value)
+			if err != nil {
+				// TODO: log error
+				continue
+			}
+			items[k] = value
 		}
 	}
 	return items
 }
 
 // Keys returns a slice of the keys in the cache.
-func (c *LFUCache) Keys(checkExpired bool) []interface{} {
+func (c *LFUCache[K, V, S]) Keys(checkExpired bool) []K {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	keys := make([]interface{}, 0, len(c.items))
+	keys := make([]K, 0, len(c.items))
 	now := time.Now()
 	for k := range c.items {
 		if !checkExpired || c.has(k, &now) {
@@ -330,7 +335,7 @@ func (c *LFUCache) Keys(checkExpired bool) []interface{} {
 }
 
 // Len returns the number of items in the cache.
-func (c *LFUCache) Len(checkExpired bool) int {
+func (c *LFUCache[K, V, S]) Len(checkExpired bool) int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !checkExpired {
@@ -347,21 +352,20 @@ func (c *LFUCache) Len(checkExpired bool) int {
 }
 
 // Completely clear the cache
-func (c *LFUCache) Purge() {
+func (c *LFUCache[K, V, S]) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.purgeVisitorFunc != nil {
-		for key, item := range c.items {
-			c.purgeVisitorFunc(key, item.value)
-		}
+	for key, item := range c.items {
+		err := c.purgeValue(key, item.value)
+		_ = err // TODO: log error
 	}
 
 	c.init()
 }
 
 // IsExpired returns boolean value whether this item is expired or not.
-func (it *lfuItem) IsExpired(now *time.Time) bool {
+func (it *lfuItem[K, S]) IsExpired(now *time.Time) bool {
 	if it.expiration == nil {
 		return false
 	}
@@ -372,6 +376,6 @@ func (it *lfuItem) IsExpired(now *time.Time) bool {
 	return it.expiration.Before(*now)
 }
 
-func isRemovableFreqEntry(entry *freqEntry) bool {
+func isRemovableFreqEntry[K comparable, S any](entry *freqEntry[K, S]) bool {
 	return entry.freq != 0 && len(entry.items) == 0
 }
