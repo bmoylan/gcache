@@ -76,6 +76,10 @@ type (
 	SerializeFunc[K comparable, V any, S any]   func(K, V) (S, error)
 )
 
+// CacheBuilder is used to build a cache.
+// The K type represents the cache key.
+// The V type represents the cache value.
+// The S type represents the serialized value. If the serialized type is the same as the value type, use CacheBuilder[K, V, V].
 type CacheBuilder[K comparable, V any, S any] struct {
 	clock            Clock
 	tp               string
@@ -99,21 +103,14 @@ func New[K comparable, V any](size int) *CacheBuilder[K, V, V] {
 	}
 }
 
+// NewWithSerializedType creates a new cache with serialized type different than the type used in the Cache API.
+// The builder's SerializeFunc and DeserializeFunc must be set; otherwise, all operations will error.
 func NewWithSerializedType[K comparable, V any, S any](size int) *CacheBuilder[K, V, S] {
 	return &CacheBuilder[K, V, S]{
 		clock: NewRealClock(),
 		tp:    TYPE_SIMPLE,
 		size:  size,
-		// TODO will panic if serializeFunc/deserializeFunc are nil
 	}
-}
-
-func NewSingleton[V any]() *CacheBuilder[struct{}, V, V] {
-	return New[struct{}, V](1)
-}
-
-func NewSingletonWithSerializedType[V any, S any]() *CacheBuilder[struct{}, V, S] {
-	return NewWithSerializedType[struct{}, V, S](1)
 }
 
 func (cb *CacheBuilder[K, V, S]) Clock(clock Clock) *CacheBuilder[K, V, S] {
@@ -229,7 +226,7 @@ func (cb *CacheBuilder[K, V, S]) newBaseCache() baseCache[K, V, S] {
 }
 
 // load a new value using by specified key.
-func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), isWait bool) (V, error) {
+func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration, error) (V, error), isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
 		return zero[V](), KeyNotFoundError
 	}
@@ -239,11 +236,7 @@ func (c *baseCache[K, V, S]) load(key K, cb func(V, *time.Duration) (V, error), 
 				e = fmt.Errorf("loader panics: %v", r)
 			}
 		}()
-		v, expiration, err := c.loaderExpireFunc(key)
-		if err != nil {
-			return v, err
-		}
-		return cb(v, expiration)
+		return cb(c.loaderExpireFunc(key))
 	}, isWait)
 	return v, err
 }

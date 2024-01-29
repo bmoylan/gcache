@@ -156,7 +156,10 @@ func (c *LFUCache[K, V, S]) getWithLoader(key K, isWait bool) (V, error) {
 	if c.loaderExpireFunc == nil {
 		return zero[V](), KeyNotFoundError
 	}
-	return c.load(key, func(v V, expiration *time.Duration) (V, error) {
+	return c.load(key, func(v V, expiration *time.Duration, e error) (V, error) {
+		if e != nil {
+			return zero[V](), e
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		item, err := c.set(key, v)
