@@ -32,6 +32,9 @@ type Cache[K comparable, V any] interface {
 	GetIFPresent(key K) (V, error)
 	// GetALL returns a map containing all key-value pairs in the cache.
 	GetALL(checkExpired bool) map[K]V
+	// get is a private method.
+	// If onLoad is true (get is called after loading a miss), a cache hit is not recorded.
+	// It expects to be run under lock.
 	get(key K, onLoad bool) (V, error)
 	// Remove removes the specified key from the cache if the key is present.
 	// Returns true if the key was present and the key has been deleted.
@@ -311,6 +314,14 @@ func (c *baseCache[K, V, S]) addValue(key K, value V) (err error) {
 		c.addedFunc(key, value)
 	}
 	return nil
+}
+
+func (c *baseCache[K, V, S]) newExpiration() *time.Time {
+	if c.expiration == nil {
+		return nil
+	}
+	t := c.clock.Now().Add(*c.expiration)
+	return &t
 }
 
 func zero[T any]() (t T) { return }

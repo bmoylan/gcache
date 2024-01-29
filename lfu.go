@@ -73,9 +73,7 @@ func (c *LFUCache[K, V, S]) set(key K, value V) (*lfuItem[K, S], error) {
 
 	// Check for existing item
 	item, ok := c.items[key]
-	if ok {
-		item.value = serializedValue
-	} else {
+	if !ok {
 		// Verify size not exceeded
 		if len(c.items) >= c.size {
 			c.evict(1)
@@ -83,7 +81,6 @@ func (c *LFUCache[K, V, S]) set(key K, value V) (*lfuItem[K, S], error) {
 		item = &lfuItem[K, S]{
 			clock:       c.clock,
 			key:         key,
-			value:       serializedValue,
 			freqElement: nil,
 		}
 		el := c.freqList.Front()
@@ -93,11 +90,8 @@ func (c *LFUCache[K, V, S]) set(key K, value V) (*lfuItem[K, S], error) {
 		item.freqElement = el
 		c.items[key] = item
 	}
-
-	if c.expiration != nil {
-		t := c.clock.Now().Add(*c.expiration)
-		item.expiration = &t
-	}
+	item.value = serializedValue
+	item.expiration = c.newExpiration()
 
 	if err := c.addValue(key, value); err != nil {
 		return nil, err

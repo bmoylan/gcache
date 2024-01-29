@@ -35,7 +35,6 @@ func (c *LRUCache[K, V, S]) set(key K, value V) (*lruItem[K, S], error) {
 	if it, ok := c.items[key]; ok {
 		c.evictList.MoveToFront(it)
 		item = it.Value.(*lruItem[K, S])
-		item.value = serializedValue
 	} else {
 		// Verify size not exceeded
 		if c.evictList.Len() >= c.size {
@@ -44,15 +43,11 @@ func (c *LRUCache[K, V, S]) set(key K, value V) (*lruItem[K, S], error) {
 		item = &lruItem[K, S]{
 			clock: c.clock,
 			key:   key,
-			value: serializedValue,
 		}
 		c.items[key] = c.evictList.PushFront(item)
 	}
-
-	if c.expiration != nil {
-		t := c.clock.Now().Add(*c.expiration)
-		item.expiration = &t
-	}
+	item.value = serializedValue
+	item.expiration = c.newExpiration()
 
 	if err := c.addValue(key, value); err != nil {
 		return nil, err

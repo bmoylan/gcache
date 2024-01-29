@@ -55,24 +55,18 @@ func (c *SimpleCache[K, V, S]) set(key K, value V) (any, error) {
 
 	// Check for existing item
 	item, ok := c.items[key]
-	if ok {
-		item.value = serializedValue
-	} else {
+	if !ok {
 		// Verify size not exceeded
 		if (len(c.items) >= c.size) && c.size > 0 {
 			c.evict(1)
 		}
 		item = &simpleItem[S]{
 			clock: c.clock,
-			value: serializedValue,
 		}
 		c.items[key] = item
 	}
-
-	if c.expiration != nil {
-		t := c.clock.Now().Add(*c.expiration)
-		item.expiration = &t
-	}
+	item.value = serializedValue
+	item.expiration = c.newExpiration()
 
 	if err := c.addValue(key, value); err != nil {
 		return nil, err

@@ -85,21 +85,15 @@ func (c *ARC[K, V, S]) set(key K, value V) (_ *arcItem[K, S], err error) {
 	}
 
 	item, ok := c.items[key]
-	if ok {
-		item.value = serializedValue
-	} else {
+	if !ok {
 		item = &arcItem[K, S]{
 			clock: c.clock,
 			key:   key,
-			value: serializedValue,
 		}
 		c.items[key] = item
 	}
-
-	if c.expiration != nil {
-		t := c.clock.Now().Add(*c.expiration)
-		item.expiration = &t
-	}
+	item.value = serializedValue
+	item.expiration = c.newExpiration()
 
 	defer func() {
 		if e := c.addValue(key, value); e != nil && err == nil {
